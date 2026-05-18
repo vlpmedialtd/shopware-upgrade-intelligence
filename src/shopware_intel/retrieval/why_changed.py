@@ -138,34 +138,42 @@ def _related_changelog(
     to_version: str,
     limit: int = 10,
 ) -> list[dict[str, Any]]:
-    base_name = file_path.rsplit("/", 1)[-1].rsplit(".", 1)[0]
-    needles = {file_path, base_name}
+    file_name = file_path.rsplit("/", 1)[-1]
+    needles = {file_path}
+    if len(file_name) >= 8 and "." in file_name:
+        needles.add(file_name)
 
+    seen_files: set[str] = set()
     hits: list[dict[str, Any]] = []
     offset: Any = None
     while True:
         points, offset = client.scroll(
             collection_name="changes",
-            limit=256,
+            limit=512,
             offset=offset,
             with_payload=True,
             with_vectors=False,
         )
         for p in points:
             payload = p.payload or {}
-            version = payload.get("version", "")
-            if not (from_version < version <= to_version):
+            target = payload.get("target_version", "")
+            if not target or not (from_version < target <= to_version):
                 continue
             content = payload.get("content", "")
             if not any(n in content for n in needles):
                 continue
+            cl_file = payload.get("file_path", "")
+            if cl_file in seen_files:
+                continue
+            seen_files.add(cl_file)
             hits.append(
                 {
-                    "version": version,
+                    "target_version": target,
                     "title": payload.get("symbol_name", ""),
                     "section": (payload.get("section") or "").lower()
                     or payload.get("symbol_kind", ""),
                     "issue": payload.get("issue"),
+                    "changelog_path": cl_file,
                     "snippet": content[:400] + ("…" if len(content) > 400 else ""),
                 }
             )
