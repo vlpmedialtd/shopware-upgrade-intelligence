@@ -92,3 +92,39 @@ def show_file(mirror_path: Path, tag: str, path: str) -> bytes | None:
     if proc.returncode != 0:
         return None
     return proc.stdout
+
+
+def list_tree_files(mirror_path: Path, tag: str, *, prefix: str = "") -> list[str]:
+    """List all files in a tag's tree (ignores .gitattributes export-ignore)."""
+    cmd = ["git", "ls-tree", "-r", "--name-only", tag]
+    if prefix:
+        cmd.append(prefix)
+    out = subprocess.run(cmd, cwd=mirror_path, check=True, capture_output=True, text=True).stdout
+    return [line.strip() for line in out.splitlines() if line.strip()]
+
+
+def supplement_export_ignored(mirror_path: Path, tag: str, dest: Path) -> int:
+    """Materialize changelog/ and UPGRADE-*.md files that git archive strips.
+
+    Shopware's .gitattributes marks `/changelog` and `/*.md` as export-ignore, so
+    `git archive` omits them. We fetch them via `git show` since they are the primary
+    source of structured upgrade information.
+    """
+    count = 0
+    for path in list_tree_files(mirror_path, tag, prefix="changelog/"):
+        data = show_file(mirror_path, tag, path)
+        if data is None:
+            continue
+        target = dest / path
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(data)
+        count += 1
+    for path in list_tree_files(mirror_path, tag):
+        if not path.startswith("UPGRADE-") or not path.endswith(".md"):
+            continue
+        data = show_file(mirror_path, tag, path)
+        if data is None:
+            continue
+        (dest / path).write_bytes(data)
+        count += 1
+    return count

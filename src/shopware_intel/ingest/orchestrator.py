@@ -19,8 +19,21 @@ from rich.progress import (
 from shopware_intel.areas import Area
 from shopware_intel.config import Settings
 from shopware_intel.ingest.chunk.base import Chunk
+from shopware_intel.ingest.chunk.changelog import chunk_changelog
+from shopware_intel.ingest.chunk.markdown import chunk_upgrade_md
 from shopware_intel.ingest.chunk.php import chunk_php
-from shopware_intel.ingest.clone import ensure_mirror, export_tag, list_tags, tag_sha
+from shopware_intel.ingest.chunk.scss import chunk_scss
+from shopware_intel.ingest.chunk.ts_js import chunk_ts_js
+from shopware_intel.ingest.chunk.twig import chunk_twig
+from shopware_intel.ingest.chunk.vue import chunk_vue
+from shopware_intel.ingest.chunk.xml import chunk_xml
+from shopware_intel.ingest.clone import (
+    ensure_mirror,
+    export_tag,
+    list_tags,
+    supplement_export_ignored,
+    tag_sha,
+)
 from shopware_intel.ingest.embed import OllamaEmbedder
 from shopware_intel.ingest.extract import SourceFile, walk_tag
 from shopware_intel.ingest.load import (
@@ -40,8 +53,25 @@ def chunk_file(sf: SourceFile) -> list[Chunk]:
         content = sf.abs_path.read_text(encoding="utf-8", errors="replace")
     except OSError:
         return []
+    area = sf.area.value
+    path = sf.rel_path
     if sf.language == "php":
-        return chunk_php(content, file_path=sf.rel_path, area=sf.area.value)
+        return chunk_php(content, file_path=path, area=area)
+    if sf.language == "twig":
+        return chunk_twig(content, file_path=path, area=area)
+    if sf.language == "scss" or sf.language == "css":
+        return chunk_scss(content, file_path=path, area=area)
+    if sf.language == "vue":
+        return chunk_vue(content, file_path=path, area=area)
+    if sf.language in ("ts", "js"):
+        return chunk_ts_js(content, file_path=path, area=area, language=sf.language)
+    if sf.language == "xml":
+        return chunk_xml(content, file_path=path, area=area)
+    if sf.language == "markdown":
+        if path.startswith("changelog/"):
+            return chunk_changelog(content, file_path=path, area=area)
+        if path.startswith("UPGRADE-"):
+            return chunk_upgrade_md(content, file_path=path, area=area)
     return []
 
 
@@ -55,6 +85,8 @@ async def _process_tag(tag: str, settings: Settings, state: StateStore) -> int:
         tmp_path = Path(tmp)
         console.print(f"[cyan]extract[/] {tag} → {tmp_path}")
         export_tag(settings.mirror_path, tag, tmp_path)
+        supplement_count = supplement_export_ignored(settings.mirror_path, tag, tmp_path)
+        console.print(f"  [dim]supplemented {supplement_count} export-ignored files[/]")
 
         files = [sf for sf in walk_tag(tmp_path) if sf.area is not Area.OTHER]
         console.print(f"  [dim]{len(files)} files after filter[/]")
@@ -89,13 +121,14 @@ async def _process_tag(tag: str, settings: Settings, state: StateStore) -> int:
                 console=console,
             ) as progress:
                 for area_name, chunks in by_area.items():
-                    if area_name not in CODE_COLLECTIONS:
+                    collection = "changes" if area_name == Area.CHANGES.value else area_name
+                    if collection not in CODE_COLLECTIONS and collection != "changes":
                         continue
-                    task_id = progress.add_task(f"embed[{area_name}]", total=len(chunks))
+                    task_id = progress.add_task(f"embed[{collection}]", total=len(chunks))
                     texts = [c.content for c in chunks]
                     vectors = await embedder.embed(texts, kind="document")
                     progress.update(task_id, advance=len(chunks))
-                    point_ids = upsert_chunks(client, area_name, tag, chunks, vectors)
+                    point_ids = upsert_chunks(client, collection, tag, chunks, vectors)
                     for pid, chunk in zip(point_ids, chunks, strict=True):
                         state.record_point(pid, tag, chunk.file_path, chunk.content_sha)
             client.close()

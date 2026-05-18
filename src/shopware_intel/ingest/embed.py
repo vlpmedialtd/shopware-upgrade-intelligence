@@ -21,7 +21,8 @@ class OllamaEmbedder:
         if not texts:
             return []
         prefix = "search_query: " if kind == "query" else "search_document: "
-        prepared = [prefix + t for t in texts]
+        # nomic-embed-text has a hard 2048-token limit; ~7000 chars stays well under that.
+        prepared = [prefix + (t if len(t) <= 7000 else t[:7000]) for t in texts]
         results: list[list[float]] = []
         for i in range(0, len(prepared), self.batch_size):
             batch = prepared[i : i + self.batch_size]

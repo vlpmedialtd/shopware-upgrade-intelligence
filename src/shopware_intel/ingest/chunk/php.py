@@ -24,9 +24,9 @@ def chunk_php(content: str, *, file_path: str, area: str) -> list[Chunk]:
                 file_path=file_path,
                 language="php",
                 area=area,
-                content=content[:3500],
+                content=content[:2000],
                 start_line=1,
-                end_line=_count_lines(content[:3500]),
+                end_line=_count_lines(content[:2000]),
                 symbol_kind="file",
                 symbol_name=file_path.rsplit("/", 1)[-1],
             )
@@ -39,8 +39,8 @@ def chunk_php(content: str, *, file_path: str, area: str) -> list[Chunk]:
         body_start = m.start()
         body_end = boundaries[i + 1]
         body = content[body_start:body_end].strip()
-        if len(body) > 3500:
-            body = body[:3500]
+        if len(body) > 2000:
+            body = body[:2000]
         fqn = f"{namespace}\\{name}" if namespace else name
         deprecated_in = _find_deprecated(content[: m.end()])
         chunks.append(

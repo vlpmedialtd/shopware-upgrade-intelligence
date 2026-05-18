@@ -14,7 +14,7 @@ console = Console()
 
 def main(
     query: str = typer.Argument(..., help="Query text"),
-    area: str = typer.Option("core", help="core|storefront|administration|checkout|flow"),
+    area: str = typer.Option("core", help="core|storefront|administration|checkout|flow|changes"),
     version: str | None = typer.Option(None, help="e.g. '6.7.0.0'"),
     limit: int = typer.Option(8),
 ) -> None:
