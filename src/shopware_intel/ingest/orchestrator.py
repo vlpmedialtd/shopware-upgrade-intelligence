@@ -18,10 +18,10 @@ from rich.progress import (
 
 from shopware_intel.areas import Area
 from shopware_intel.config import Settings
-from shopware_intel.ingest.chunk.base import Chunk
+from shopware_intel.ingest.chunk.base import Chunk, embedding_text
 from shopware_intel.ingest.chunk.changelog import chunk_changelog
 from shopware_intel.ingest.chunk.markdown import chunk_upgrade_md
-from shopware_intel.ingest.chunk.php import chunk_php
+from shopware_intel.ingest.chunk.php_ts import chunk_php_ts as chunk_php
 from shopware_intel.ingest.chunk.scss import chunk_scss
 from shopware_intel.ingest.chunk.ts_js import chunk_ts_js
 from shopware_intel.ingest.chunk.twig import chunk_twig
@@ -109,7 +109,7 @@ async def _process_tag(tag: str, settings: Settings, state: StateStore) -> int:
             settings.embed_dim,
             settings.embed_batch_size,
         )
-        client = open_client(settings.qdrant_path)
+        client = open_client(settings.qdrant_path, url=settings.qdrant_url)
         ensure_collections(client, settings.embed_dim)
         try:
             with Progress(
@@ -125,7 +125,7 @@ async def _process_tag(tag: str, settings: Settings, state: StateStore) -> int:
                     if collection not in CODE_COLLECTIONS and collection != "changes":
                         continue
                     task_id = progress.add_task(f"embed[{collection}]", total=len(chunks))
-                    texts = [c.content for c in chunks]
+                    texts = [embedding_text(c) for c in chunks]
                     vectors = await embedder.embed(texts, kind="document")
                     progress.update(task_id, advance=len(chunks))
                     point_ids = upsert_chunks(client, collection, tag, chunks, vectors)

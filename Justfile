@@ -23,6 +23,10 @@ pilot:
 ingest-all:
     uv run sw-intel-ingest run --tag-glob 'v6.[4567].*' --skip-prerelease
 
+# Parallel multi-tag ingest. Use OLLAMA_NUM_PARALLEL=N matching --workers.
+ingest-parallel workers="4" tag_glob="v6.[4567].*":
+    OLLAMA_NUM_PARALLEL={{workers}} uv run sw-intel-parallel-ingest --workers {{workers}} --tag-glob '{{tag_glob}}'
+
 finalize:
     uv run sw-intel-ingest finalize
 

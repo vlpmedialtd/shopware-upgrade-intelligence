@@ -3,6 +3,7 @@ from __future__ import annotations
 import shutil
 from pathlib import Path
 
+import httpx
 import typer
 from rich.console import Console
 from rich.table import Table
@@ -44,9 +45,19 @@ def main() -> None:
     )
     ok &= ollama_ok
 
-    qdrant_writable = _writable(s.qdrant_path)
-    t.add_row("qdrant path", "OK" if qdrant_writable else "FAIL", str(s.qdrant_path))
-    ok &= qdrant_writable
+    if s.qdrant_url:
+        qdrant_ok = _check_qdrant_url(s.qdrant_url)
+        t.add_row(
+            "qdrant",
+            "OK" if qdrant_ok else "DOWN",
+            s.qdrant_url
+            if qdrant_ok
+            else f"{s.qdrant_url} (start with `docker start shopware-qdrant`)",
+        )
+    else:
+        qdrant_ok = _writable(s.qdrant_path)
+        t.add_row("qdrant path", "OK" if qdrant_ok else "FAIL", str(s.qdrant_path))
+    ok &= qdrant_ok
 
     state_writable = _writable(s.state_db.parent)
     t.add_row("state.db dir", "OK" if state_writable else "FAIL", str(s.state_db.parent))
@@ -58,6 +69,14 @@ def main() -> None:
 
     console.print(t)
     raise SystemExit(0 if ok else 1)
+
+
+def _check_qdrant_url(url: str) -> bool:
+    try:
+        r = httpx.get(url.rstrip("/"), timeout=5.0)
+        return r.status_code == 200
+    except Exception:
+        return False
 
 
 def _writable(path: Path) -> bool:

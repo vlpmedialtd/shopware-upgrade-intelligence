@@ -64,6 +64,7 @@ EXCLUDE_SEGMENTS = frozenset({"tests", "Test", "vendor", "node_modules"})
 EXCLUDE_SUBSTRINGS = (
     "/Resources/public/",
     "/Resources/dist/",
+    "/Migration/Fixtures/",  # example email templates, not searchable code
     ".spec.",
     ".test.",
     "Migration_",

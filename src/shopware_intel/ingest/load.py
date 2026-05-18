@@ -17,7 +17,9 @@ META_COLLECTIONS = ("changes",)
 SYMBOL_COLLECTION = "symbols"
 
 
-def open_client(qdrant_path: Path) -> QdrantClient:
+def open_client(qdrant_path: Path, url: str | None = None) -> QdrantClient:
+    if url:
+        return QdrantClient(url=url, prefer_grpc=False, timeout=60)
     qdrant_path.mkdir(parents=True, exist_ok=True)
     return QdrantClient(path=str(qdrant_path))
 
@@ -98,5 +100,10 @@ def upsert_chunks(
         }
         payload.update(chunk.extra)
         points.append(qm.PointStruct(id=pid, vector=list(vec), payload=payload))
-    client.upsert(collection_name=collection, points=points)
+
+    # Qdrant's default HTTP body limit is 32 MB; chunked upsert keeps each payload
+    # well under that for the 2 KB-payload chunks we produce.
+    BATCH = 512
+    for i in range(0, len(points), BATCH):
+        client.upsert(collection_name=collection, points=points[i : i + BATCH])
     return point_ids

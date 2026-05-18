@@ -80,7 +80,10 @@ def build_filter(
 class Searcher:
     def __init__(self, settings: Settings) -> None:
         self.settings = settings
-        self.client = QdrantClient(path=str(settings.qdrant_path))
+        if settings.qdrant_url:
+            self.client = QdrantClient(url=settings.qdrant_url, timeout=30)
+        else:
+            self.client = QdrantClient(path=str(settings.qdrant_path))
         self.embedder = OllamaEmbedder(
             settings.ollama_host, settings.embed_model, settings.embed_dim
         )
