@@ -101,11 +101,37 @@ class Searcher:
     ) -> list[Hit]:
         vec = await self.embedder.embed_one(query, kind="query")
         qfilter = build_filter(version=version, language=language, file_path=file_path)
+        oversample = limit * 4 if collection == "changes" else limit
         response = self.client.query_points(
             collection_name=collection,
             query=vec,
             query_filter=qfilter,
-            limit=limit,
+            limit=oversample,
             with_payload=True,
         )
-        return [Hit.from_point(p) for p in response.points]
+        hits = [Hit.from_point(p) for p in response.points]
+        if collection == "changes":
+            hits = _dedup_changelog_hits(hits)
+        return hits[:limit]
+
+
+def _dedup_changelog_hits(hits: list[Hit]) -> list[Hit]:
+    """A logical changelog entry (e.g. release-6-5-2-0/foo.md) is re-indexed once per
+    ingest tag because Shopware ships its full historical `changelog/` tree in every
+    release. Different sections of the same entry are kept distinct (their content
+    differs); duplicate ingestions of the same section collapse to the highest-scoring
+    hit, which arrives first since `query_points` is score-ordered."""
+    seen: set[tuple[str, str, str, str]] = set()
+    out: list[Hit] = []
+    for h in hits:
+        basename = h.file_path.rsplit("/", 1)[-1]
+        release_marker = ""
+        if "release-" in h.file_path:
+            release_marker = h.file_path.split("release-", 1)[1].split("/", 1)[0]
+        section_signature = (h.snippet or "")[:120]
+        key = (release_marker or h.file_path, h.symbol_name, basename, section_signature)
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(h)
+    return out

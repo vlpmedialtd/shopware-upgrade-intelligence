@@ -26,7 +26,14 @@ def _search_tool(name: str, area_label: str, examples: str) -> Tool:
         name=name,
         description=(
             f"Semantic search across the Shopware {area_label} code (indexed across all known "
-            f"Shopware 6 versions). Use this for questions like: {examples}"
+            f"Shopware 6 versions). Use this for questions like: {examples}\n\n"
+            "TIP: Shopware's source uses English identifiers (PHP class names, event names, "
+            "service IDs, Twig block names). German prose queries match weakly — if your query "
+            "is 'wie greife ich auf das Kategorielisting zu', also try the English/code form "
+            "'ProductListingCriteriaEvent', 'product-listing.criteria', or the file path "
+            "'src/Storefront/Resources/views/storefront/component/listing/'. The retrieval "
+            "model is local nomic-embed-text and does not bridge German prose → English code "
+            "well; one extra call with the technical term usually fixes a poor first result."
         ),
         inputSchema={
             "type": "object",
