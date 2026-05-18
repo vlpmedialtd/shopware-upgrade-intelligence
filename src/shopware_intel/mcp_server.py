@@ -15,6 +15,7 @@ from shopware_intel.config import get_settings
 from shopware_intel.retrieval.css_class import find_css_class
 from shopware_intel.retrieval.deprecations import find_deprecations
 from shopware_intel.retrieval.search import Searcher
+from shopware_intel.retrieval.upgrade_path import upgrade_path
 from shopware_intel.retrieval.why_changed import why_changed
 
 log = logging.getLogger(__name__)
@@ -136,6 +137,41 @@ _TOOL_DEFINITIONS: list[Tool] = [
         },
     ),
     Tool(
+        name="upgrade_path",
+        description=(
+            "Synthesize the upgrade story from one Shopware version to another. Aggregates "
+            "changelog entries and UPGRADE-6.X.md sections whose target_version falls into "
+            "the (from, to] range, groups by section (Core / API / Storefront / Administration / "
+            "etc.), and deduplicates by NEXT-* issue id. Use for: 'was muss ich vor dem Update "
+            "von 6.4.20.2 auf 6.7.0.0 anpassen?', 'was kam neu zwischen 6.6 und 6.7 im API?'."
+        ),
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "from_version": {
+                    "type": "string",
+                    "description": "Lower bound (exclusive), e.g. '6.4.20.2'.",
+                },
+                "to_version": {
+                    "type": "string",
+                    "description": "Upper bound (inclusive), e.g. '6.7.0.0'.",
+                },
+                "areas": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "Optional section filter; subset of [core, api, administration, storefront, upgrade information, next major version changes].",
+                },
+                "limit_per_section": {
+                    "type": "integer",
+                    "default": 50,
+                    "minimum": 1,
+                    "maximum": 200,
+                },
+            },
+            "required": ["from_version", "to_version"],
+        },
+    ),
+    Tool(
         name="why_changed",
         description=(
             "Structural diff of a single Shopware file across two versions, plus linked changelog "
@@ -189,6 +225,8 @@ def _build_server() -> Server:
             return _css_class(arguments, searcher)
         if name == "why_changed":
             return _why_changed(arguments, searcher, settings)
+        if name == "upgrade_path":
+            return _upgrade_path(arguments, searcher)
         raise ValueError(f"Unknown tool: {name}")
 
     return app
@@ -255,6 +293,17 @@ def _why_changed(arguments: dict[str, Any], searcher: Searcher, settings: Any) -
     return [
         TextContent(type="text", text=json.dumps(report.to_dict(), indent=2, ensure_ascii=False))
     ]
+
+
+def _upgrade_path(arguments: dict[str, Any], searcher: Searcher) -> list[TextContent]:
+    result = upgrade_path(
+        searcher.client,
+        arguments["from_version"],
+        arguments["to_version"],
+        areas=arguments.get("areas"),
+        limit_per_section=int(arguments.get("limit_per_section", 50)),
+    )
+    return [TextContent(type="text", text=json.dumps(result, indent=2, ensure_ascii=False))]
 
 
 async def _serve() -> None:
