@@ -25,20 +25,27 @@ def open_client(qdrant_path: Path, url: str | None = None) -> QdrantClient:
 
 
 def ensure_collections(client: QdrantClient, dim: int) -> None:
-    existing = {c.name for c in client.get_collections().collections}
+    """Idempotent: safe to call concurrently from N parallel workers. A 409 just
+    means another worker won the race; the collection is there either way."""
     for name in (*CODE_COLLECTIONS, *META_COLLECTIONS):
-        if name not in existing:
-            client.create_collection(
-                collection_name=name,
-                vectors_config=qm.VectorParams(size=dim, distance=qm.Distance.COSINE),
-            )
-            _create_payload_indexes(client, name)
-    if SYMBOL_COLLECTION not in existing:
-        client.create_collection(
-            collection_name=SYMBOL_COLLECTION,
-            vectors_config=qm.VectorParams(size=4, distance=qm.Distance.COSINE),
-        )
-        _create_symbol_indexes(client)
+        _maybe_create(client, name, qm.VectorParams(size=dim, distance=qm.Distance.COSINE))
+        _create_payload_indexes(client, name)
+    _maybe_create(
+        client,
+        SYMBOL_COLLECTION,
+        qm.VectorParams(size=4, distance=qm.Distance.COSINE),
+    )
+    _create_symbol_indexes(client)
+
+
+def _maybe_create(client: QdrantClient, name: str, vectors_config: qm.VectorParams) -> None:
+    try:
+        client.create_collection(collection_name=name, vectors_config=vectors_config)
+    except Exception as exc:
+        msg = str(exc)
+        if "409" in msg or "already exists" in msg.lower():
+            return
+        raise
 
 
 def _create_payload_indexes(client: QdrantClient, name: str) -> None:

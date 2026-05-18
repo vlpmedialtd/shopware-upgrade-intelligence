@@ -19,16 +19,70 @@ import subprocess
 import sys
 import time
 from datetime import datetime
+from pathlib import Path
 
+import httpx
 import typer
 from rich.console import Console
 from rich.table import Table
 
 from shopware_intel.config import get_settings
 from shopware_intel.ingest.clone import ensure_mirror, list_tags
+from shopware_intel.ingest.load import ensure_collections, open_client
 from shopware_intel.state import StateStore
 
 console = Console()
+
+
+def _start_ollama_instances(n: int, base_port: int = 11434) -> list[subprocess.Popen[bytes]]:
+    """Start N independent ollama serve instances on consecutive ports.
+
+    Ollama serializes embed requests through its single loaded model regardless of
+    OLLAMA_NUM_PARALLEL: that flag controls the request queue, not parallel forward
+    passes. Real N-fold throughput requires N independent instances, each holding
+    its own copy of the model (1.1 GB nomic-embed-text x N).
+    """
+    procs: list[subprocess.Popen[bytes]] = []
+    for i in range(n):
+        port = base_port + i
+        if _ollama_ready(f"http://localhost:{port}"):
+            console.print(f"[dim]ollama:{port} already up[/]")
+            continue
+        env = {
+            **os.environ,
+            "OLLAMA_HOST": f"127.0.0.1:{port}",
+            "OLLAMA_MODELS": str(Path.home() / ".ollama" / "models"),
+            "OLLAMA_KEEP_ALIVE": "24h",
+            "OLLAMA_FLASH_ATTENTION": "1",
+        }
+        log_path = Path("/tmp") / f"ollama-{port}.log"
+        proc = subprocess.Popen(
+            ["ollama", "serve"],
+            env=env,
+            stdout=log_path.open("wb"),
+            stderr=subprocess.STDOUT,
+        )
+        procs.append(proc)
+        console.print(f"[cyan]ollama:{port} starting (pid {proc.pid}, log {log_path})[/]")
+    # Wait for all to be reachable
+    for i in range(n):
+        port = base_port + i
+        deadline = time.time() + 30
+        while time.time() < deadline:
+            if _ollama_ready(f"http://localhost:{port}"):
+                console.print(f"[green]ollama:{port} up[/]")
+                break
+            time.sleep(1)
+        else:
+            console.print(f"[red]ollama:{port} did not come up in 30s[/]")
+    return procs
+
+
+def _ollama_ready(host: str) -> bool:
+    try:
+        return httpx.get(f"{host}/api/tags", timeout=2.0).status_code == 200
+    except Exception:
+        return False
 
 
 def main(
@@ -36,6 +90,15 @@ def main(
     workers: int = typer.Option(4, "--workers", "-w", min=1, max=10),
     skip_prerelease: bool = typer.Option(True),
     dry_run: bool = typer.Option(False, help="List the tag plan without running"),
+    multi_ollama: bool = typer.Option(
+        True,
+        "--multi-ollama/--single-ollama",
+        help=(
+            "Start one ollama serve instance per worker on consecutive ports "
+            "(default). Real N-fold embed throughput; costs ~1.1 GB RAM per extra "
+            "instance. --single-ollama queues all workers through localhost:11434."
+        ),
+    ),
 ) -> None:
     settings = get_settings()
     ensure_mirror(settings.mirror_path)
@@ -52,38 +115,55 @@ def main(
     if dry_run or not pending:
         return
 
-    if workers > 4 and "OLLAMA_NUM_PARALLEL" not in os.environ:
-        console.print(
-            f"[yellow]Hint: set OLLAMA_NUM_PARALLEL={workers} on the Ollama server "
-            "to actually parallelize embed requests."
-        )
+    # Pre-create Qdrant collections once so the workers don't race on creation.
+    qdrant = open_client(settings.qdrant_path, url=settings.qdrant_url)
+    ensure_collections(qdrant, settings.embed_dim)
+    qdrant.close()
+    console.print("[dim]qdrant collections ready[/]")
+
+    if multi_ollama and workers > 1:
+        _start_ollama_instances(workers)
 
     started_at = time.time()
-    cmd_template = [
-        sys.executable,
-        "-m",
-        "shopware_intel.cli.ingest",
-        "run",
-        "--tag",
-        "{tag}",
-    ]
     running: dict[str, subprocess.Popen[bytes]] = {}
     queue = list(pending)
     results: list[tuple[str, int, float]] = []
 
-    def _spawn(tag: str) -> None:
-        cmd = [c.format(tag=tag) for c in cmd_template]
+    def _spawn(tag: str, worker_index: int) -> None:
+        cmd = [
+            sys.executable,
+            "-m",
+            "shopware_intel.cli.ingest",
+            "run",
+            "--tag",
+            tag,
+        ]
         log_dir = settings.state_db.parent / "ingest-logs"
         log_dir.mkdir(parents=True, exist_ok=True)
         log = log_dir / f"{tag}.log"
+        env = {**os.environ}
+        if multi_ollama:
+            env["SW_INTEL_OLLAMA_HOST"] = f"http://localhost:{11434 + worker_index}"
         f = log.open("wb")
-        proc = subprocess.Popen(cmd, stdout=f, stderr=subprocess.STDOUT)
+        proc = subprocess.Popen(cmd, stdout=f, stderr=subprocess.STDOUT, env=env)
         running[tag] = proc
-        console.print(f"[cyan]START[/] {tag} (pid {proc.pid}, log {log})")
+        host_label = env.get("SW_INTEL_OLLAMA_HOST", settings.ollama_host)
+        console.print(f"[cyan]START[/] {tag} (pid {proc.pid}, ollama {host_label}, log {log})")
+
+    # worker_index → tag mapping so each slot consistently hits the same ollama port
+    slots: dict[int, str | None] = {i: None for i in range(workers)}
+
+    def _free_slot() -> int | None:
+        for i, t in slots.items():
+            if t is None:
+                return i
+        return None
 
     while queue or running:
-        while queue and len(running) < workers:
-            _spawn(queue.pop(0))
+        while queue and (idx := _free_slot()) is not None:
+            tag = queue.pop(0)
+            slots[idx] = tag
+            _spawn(tag, idx)
 
         for tag in list(running):
             rc = running[tag].poll()
@@ -97,6 +177,10 @@ def main(
                 f"{len(results)}/{len(pending)} done; {len(queue)} queued)"
             )
             del running[tag]
+            for i, t in slots.items():
+                if t == tag:
+                    slots[i] = None
+                    break
 
         if running:
             time.sleep(2)
