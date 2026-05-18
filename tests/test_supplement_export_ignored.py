@@ -27,8 +27,9 @@ def test_supplement_restores_upgrade_md():
     with tempfile.TemporaryDirectory() as tmp:
         tmp_path = Path(tmp)
         export_tag(settings.mirror_path, PILOT_TAG, tmp_path)
-        assert not (tmp_path / "UPGRADE-6.7.md").exists(), \
+        assert not (tmp_path / "UPGRADE-6.7.md").exists(), (
             "archive should have stripped UPGRADE-6.7.md"
+        )
         count = supplement_export_ignored(settings.mirror_path, PILOT_TAG, tmp_path)
         assert count > 0
         assert (tmp_path / "UPGRADE-6.7.md").exists()
