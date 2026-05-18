@@ -28,7 +28,7 @@ code anywhere.
 ## Quickstart
 
 ```bash
-git clone https://github.com/<you>/shopware-upgrade-intelligence
+git clone https://github.com/vlpmedialtd/shopware-upgrade-intelligence
 cd shopware-upgrade-intelligence
 just bootstrap                       # installs python@3.11, ollama, uv, just, pulls the model
 just pilot-one-tag v6.7.0.0          # ~10 min, indexes a single tag (all 6 collections)
@@ -62,29 +62,33 @@ Shopware ships `.gitattributes` with `/changelog export-ignore` and `/*.md expor
 — `git archive` strips exactly the upgrade metadata we need. The ingester compensates
 by supplementing those files via `git show <tag>:<path>` after the archive is extracted.
 
-## MCP tools available now (Phase 2)
+## MCP tools
 
-- `search_core(query, version?, language?)`
-- `search_storefront(query, version?, language?)`
-- `search_administration(query, version?, language?)`
-- `search_checkout(query, version?, language?)`
-- `search_flow_builder(query, version?, language?)`
-- `search_changes(query, version?)`
+| Tool | What it answers |
+|---|---|
+| `search_core` | Plugin-dev questions: *how does EntityRepository work?*, *where's the cart calculator?* |
+| `search_storefront` | Frontend: *welche CSS-Klasse stylt die Produktbeschreibung?*, *wie greife ich auf das Kategorielisting zu?* |
+| `search_administration` | Admin Vue/TS: *wie überschreibe ich das Produkt-Detail-Modul?* |
+| `search_checkout` | Cross-cut: *wo wird die Versandkostenberechnung aufgerufen?* |
+| `search_flow_builder` | *welche Trigger gibt es für Bestellzustands-Änderungen?* |
+| `search_changes` | *was kam neu in 6.7?*, *breaking changes to ArrayEntity* |
+| `find_deprecations` | Lists `@deprecated` symbols + their target removal version |
+| `find_css_class` | Where a CSS class is defined (SCSS) and used (Twig templates) |
+| `why_changed` | Per-file structural diff across versions + linked changelog entries |
+| `upgrade_path` | Synthesized upgrade story from version A to version B, grouped by section |
 
-Each tool is a semantic search bounded to its collection. The optional `version` filter
-takes a Shopware version like `"6.7.0.0"`; `language` is `php | twig | vue | ts | js |
-scss | xml | markdown`.
+## Roadmap
 
-## Coming next
-
-| Phase | Adds | Status |
-|---|---|---|
-| 3 | Multi-tag pilot (`just pilot` = all 6.7.x) + checkpointing | pending |
-| 4 | Symbol index (PHP FQN, CSS classes, Twig blocks, Symfony service aliases) + structural `diff_versions` | pending |
-| 5 | Killer tools: `find_deprecations`, `why_changed`, `find_css_class`, rename detection | pending |
-| 6 | `upgrade_path` — synthesized upgrade guide from changelog YAML | pending |
-| 7 | Full ingestion across all ~163 stable tags | pending |
-| 8 | Public launch | pending |
+| Phase | Status |
+|---|---|
+| 1 — Walking skeleton | ✅ |
+| 2 — Multi-area chunkers (PHP, Twig, SCSS, Vue, TS/JS, XML, Markdown, Changelog YAML) | ✅ |
+| 3 — Multi-tag orchestrator + state checkpointing | ✅ |
+| 4 — Symbol index + `diff_versions` (set-diff of class/method names across tags) | planned |
+| 5 — Killer tools (`find_deprecations`, `find_css_class`, `why_changed`) | ✅ |
+| 6 — `upgrade_path` synthesis | ✅ |
+| 7 — Full ingestion across all ~163 stable 6.4–6.7 tags | runtime-only |
+| 8 — Public launch on GitHub | ✅ |
 
 ## Why this exists
 
