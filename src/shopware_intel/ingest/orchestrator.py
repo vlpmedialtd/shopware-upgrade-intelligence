@@ -156,8 +156,12 @@ async def _process_tag(tag: str, settings: Settings, state: StateStore) -> int:
 
                     vectors = [cached[c.content_sha] for c in chunks]
                     point_ids = upsert_chunks(client, collection, tag, chunks, vectors)
-                    for pid, chunk in zip(point_ids, chunks, strict=True):
-                        state.record_point(pid, tag, chunk.file_path, chunk.content_sha)
+                    state.record_points(
+                        [
+                            (pid, tag, c.file_path, c.content_sha)
+                            for pid, c in zip(point_ids, chunks, strict=True)
+                        ]
+                    )
             client.close()
         finally:
             await embedder.close()

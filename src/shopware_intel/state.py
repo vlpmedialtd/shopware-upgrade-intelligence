@@ -39,11 +39,20 @@ class StateStore:
         self.db_path = db_path
         db_path.parent.mkdir(parents=True, exist_ok=True)
         with self._conn() as c:
+            # WAL allows one writer + many readers concurrently and survives
+            # parallel-worker contention far better than the rollback journal.
+            # 60-second busy_timeout makes a contending writer wait instead of
+            # raising "database is locked" -- with batched record_point() each
+            # transaction takes well under that.
+            c.execute("PRAGMA journal_mode = WAL")
+            c.execute("PRAGMA busy_timeout = 60000")
+            c.execute("PRAGMA synchronous = NORMAL")
             c.executescript(SCHEMA)
 
     @contextmanager
     def _conn(self) -> Iterator[sqlite3.Connection]:
-        conn = sqlite3.connect(self.db_path)
+        conn = sqlite3.connect(self.db_path, timeout=60)
+        conn.execute("PRAGMA busy_timeout = 60000")
         try:
             yield conn
             conn.commit()
@@ -72,6 +81,17 @@ class StateStore:
             c.execute(
                 "INSERT OR IGNORE INTO chunk_index (point_id, tag, file_path, content_sha) VALUES (?, ?, ?, ?)",
                 (point_id, tag, file_path, content_sha),
+            )
+
+    def record_points(self, rows: list[tuple[str, str, str, str]]) -> None:
+        """Batch-insert chunk_index rows in a single transaction. Avoids 36 000
+        mini-transactions per tag and the lock contention that comes with it."""
+        if not rows:
+            return
+        with self._conn() as c:
+            c.executemany(
+                "INSERT OR IGNORE INTO chunk_index (point_id, tag, file_path, content_sha) VALUES (?, ?, ?, ?)",
+                rows,
             )
 
     def known_point_ids(self) -> set[str]:
