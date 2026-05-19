@@ -22,6 +22,15 @@ CREATE TABLE IF NOT EXISTS chunk_index (
 );
 
 CREATE INDEX IF NOT EXISTS idx_chunk_tag ON chunk_index(tag);
+
+-- Vector cache: same content_sha across many Shopware tags = the same embedding.
+-- Storing the vector once and reusing it cuts ~70-85% of the embed work on a
+-- multi-patch ingest, since most Core PHP and changelog/ files barely change
+-- between adjacent patch releases.
+CREATE TABLE IF NOT EXISTS vector_cache (
+    content_sha TEXT PRIMARY KEY,
+    vector BLOB NOT NULL
+);
 """
 
 
@@ -76,3 +85,49 @@ class StateStore:
                     "SELECT tag, chunk_count, finished_at FROM tag_status ORDER BY tag"
                 ).fetchall()
             )
+
+    def get_cached_vectors(self, content_shas: list[str]) -> dict[str, list[float]]:
+        """Batch lookup of cached embeddings by content_sha. Vectors stored as
+        float32 little-endian BLOBs to keep the cache compact (~3 KB per 768-dim
+        vector vs ~9 KB if stored as JSON)."""
+        if not content_shas:
+            return {}
+        import array
+
+        out: dict[str, list[float]] = {}
+        with self._conn() as c:
+            # SQLite has a 999-parameter limit; chunk if needed.
+            for i in range(0, len(content_shas), 900):
+                batch = content_shas[i : i + 900]
+                placeholders = ",".join("?" * len(batch))
+                rows = c.execute(
+                    f"SELECT content_sha, vector FROM vector_cache WHERE content_sha IN ({placeholders})",
+                    batch,
+                ).fetchall()
+                for sha, blob in rows:
+                    a = array.array("f")
+                    a.frombytes(blob)
+                    out[sha] = a.tolist()
+        return out
+
+    def cache_vectors(self, pairs: list[tuple[str, list[float]]]) -> None:
+        """Persist (content_sha, vector) pairs. INSERT OR IGNORE so concurrent
+        writers don't trip on each other."""
+        if not pairs:
+            return
+        import array
+
+        blobs = [(sha, array.array("f", vec).tobytes()) for sha, vec in pairs]
+        with self._conn() as c:
+            c.executemany(
+                "INSERT OR IGNORE INTO vector_cache (content_sha, vector) VALUES (?, ?)",
+                blobs,
+            )
+
+    def vector_cache_stats(self) -> tuple[int, int]:
+        """Return (entry_count, total_bytes) for the cache."""
+        with self._conn() as c:
+            row = c.execute(
+                "SELECT COUNT(*), COALESCE(SUM(LENGTH(vector)), 0) FROM vector_cache"
+            ).fetchone()
+            return int(row[0]), int(row[1])

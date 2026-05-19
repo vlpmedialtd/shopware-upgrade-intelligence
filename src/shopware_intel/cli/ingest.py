@@ -61,5 +61,84 @@ def finalize() -> None:
     console.print("[yellow]finalize: not yet implemented (Phase 5)[/]")
 
 
+@app.command("warm-cache")
+def warm_cache() -> None:
+    """Backfill the vector cache from already-indexed Qdrant points.
+
+    The first 23 strategic tags were ingested before vector_cache existed, so
+    their vectors live only in Qdrant. Pulling them back into the cache means
+    every subsequent ingest benefits from cross-tag dedup -- typically saving
+    70-85%% of embed work because most files barely change between patches.
+    """
+    from typing import Any
+
+    from qdrant_client import QdrantClient
+
+    settings = get_settings()
+    state = StateStore(settings.state_db)
+    client = QdrantClient(url=settings.qdrant_url, timeout=60)
+
+    # Map point_id -> content_sha from the chunk_index sqlite table
+    import sqlite3
+
+    with sqlite3.connect(state.db_path) as conn:
+        rows = conn.execute("SELECT point_id, content_sha FROM chunk_index").fetchall()
+    sha_by_pid: dict[str, str] = dict(rows)
+    console.print(f"  [dim]{len(sha_by_pid)} point_ids in chunk_index[/]")
+    if not sha_by_pid:
+        console.print("[yellow]nothing to warm (chunk_index empty)[/]")
+        return
+
+    seen_sha: set[str] = set(state.get_cached_vectors(list({*sha_by_pid.values()})).keys())
+    console.print(f"  [dim]{len(seen_sha)} already cached[/]")
+
+    collections = [c.name for c in client.get_collections().collections]
+    added = 0
+    for col in collections:
+        if col == "symbols":
+            continue
+        offset = None
+        batch: list[tuple[str, list[float]]] = []
+        while True:
+            points, offset = client.scroll(
+                collection_name=col,
+                limit=512,
+                offset=offset,
+                with_payload=False,
+                with_vectors=True,
+            )
+            for p in points:
+                pid = str(p.id)
+                sha = sha_by_pid.get(pid)
+                if not sha or sha in seen_sha:
+                    continue
+                raw_vec: Any = p.vector
+                if isinstance(raw_vec, dict):
+                    # named-vectors case shouldn't apply here, but be safe
+                    raw_vec = next(iter(raw_vec.values()))
+                if raw_vec is None:
+                    continue
+                seen_sha.add(sha)
+                batch.append((sha, [float(x) for x in raw_vec]))
+                if len(batch) >= 1000:
+                    state.cache_vectors(batch)
+                    added += len(batch)
+                    batch = []
+            if offset is None:
+                break
+        if batch:
+            state.cache_vectors(batch)
+            added += len(batch)
+            batch = []
+        console.print(f"  [green]{col}[/]: cache size now {len(seen_sha):,}")
+
+    client.close()
+    count, total_bytes = state.vector_cache_stats()
+    console.print(
+        f"[bold green]Warmed.[/] +{added:,} entries; cache has {count:,} vectors, "
+        f"{total_bytes / 1024 / 1024:.1f} MB."
+    )
+
+
 if __name__ == "__main__":
     app()
