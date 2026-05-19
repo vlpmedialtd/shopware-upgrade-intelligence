@@ -87,6 +87,11 @@ def _ollama_ready(host: str) -> bool:
 
 def main(
     tag_glob: str = typer.Option("v6.[4567].*", help="Tag glob; default = all stable 6.4-6.7"),
+    tags: str = typer.Option(
+        "",
+        "--tags",
+        help="Comma-separated explicit tag list. Overrides --tag-glob when set.",
+    ),
     workers: int = typer.Option(4, "--workers", "-w", min=1, max=10),
     skip_prerelease: bool = typer.Option(True),
     dry_run: bool = typer.Option(False, help="List the tag plan without running"),
@@ -94,15 +99,20 @@ def main(
         True,
         "--multi-ollama/--single-ollama",
         help=(
-            "Start one ollama serve instance per worker on consecutive ports "
-            "(default). Real N-fold embed throughput; costs ~1.1 GB RAM per extra "
-            "instance. --single-ollama queues all workers through localhost:11434."
+            "Start one ollama serve instance per worker on consecutive ports. Measured "
+            "~2x throughput on M5 / 4 workers vs a single shared instance -- Apple Metal "
+            "interleaves compute across processes but does not give linear N-fold scaling. "
+            "Costs ~1.1 GB RAM per extra instance (nomic-embed-text). --single-ollama "
+            "queues all workers through one instance but keeps RAM low."
         ),
     ),
 ) -> None:
     settings = get_settings()
     ensure_mirror(settings.mirror_path)
-    all_tags = list_tags(settings.mirror_path, glob=tag_glob, skip_prerelease=skip_prerelease)
+    if tags.strip():
+        all_tags = [t.strip() for t in tags.split(",") if t.strip()]
+    else:
+        all_tags = list_tags(settings.mirror_path, glob=tag_glob, skip_prerelease=skip_prerelease)
     state = StateStore(settings.state_db)
     done = {t for t, _, _ in state.tag_summary()}
     pending = [t for t in all_tags if t not in done]
